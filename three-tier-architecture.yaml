@@ -1,0 +1,313 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Multitier Infrastructure Schema
+Parameters:
+  NamingPrefix:
+    Type: String
+    Description: The naming prefix for resources created by this template, and exported values that can be referenced by other stacks.
+    Default: WebApp1
+  InstanceType:
+    Description: Select the instance type
+    Default: t2.micro
+    AllowedValues:
+      - t2.medium
+      - t2.small
+      - t2.micro
+    Type: String
+  VPCcidr:
+    Description: CIDR Block for VPC network
+    Type: String
+    Default: 10.10.10.0/24
+  PulblicSubnetCidr:
+    Description: CIDR Block for Public Subnet
+    Type: String
+    Default: 10.10.10.0/28
+  PrivateSubnetCidr:
+    Description: CIDR Block for Private Subnet
+    Type: String
+    Default: 10.10.10.16/28 
+  DBSubnetCidr:
+    Description: CIDR Block for Private Subnet
+    Type: String
+    Default: 10.10.10.32/28
+  ImageId:
+    Description: AMI ID to be used for the this test
+    Default: ami-09d56f8956ab235b3
+    Type: String
+  KeyPairs:
+    Description: Select the key-pairs
+    Type: String
+    AllowedValues:
+      - ec2-key-us-east-1
+      - ec2-key-us-east-2
+# DB details
+  DBInstanceClass:
+    Description: DB instance class
+    Default: db.t2.micro
+    Type: String
+  DBUsername:
+    NoEcho: 'true'
+    Description: Username for MySQL database access
+    Type: String
+    MinLength: '1'
+    MaxLength: '16'
+    AllowedPattern: '[a-zA-Z][a-zA-Z0-9]*'
+    ConstraintDescription: must begin with a letter and contain only alphanumeric characters.
+  DBPassword:
+    NoEcho: 'true'
+    Description: Password MySQL database access
+    Type: String
+    MinLength: '8'
+    MaxLength: '41'
+    AllowedPattern: '[a-zA-Z0-9]*'
+    ConstraintDescription: must contain only alphanumeric characters.
+Resources:
+  VPC:
+    Type: 'AWS::EC2::VPC'
+    Properties:
+      CidrBlock: !Ref VPCcidr
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Join
+            - '-'
+            - - !Ref NamingPrefix
+              - VPC
+  InternetGateway:
+    Type: 'AWS::EC2::InternetGateway'
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Join 
+          - '-'
+          - - !Ref NamingPrefix
+            - IGN
+  AttachGateway:
+    Type: 'AWS::EC2::VPCGatewayAttachment'
+    DependsOn: InternetGateway
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+  PrivateSubnet:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateSubnetCidr
+      AvailabilityZone: "us-east-1b"
+      Tags:
+        - Key: Name
+          Value: !Join 
+          - '-'
+          - - !Ref NamingPrefix
+            - PrivateSubnet
+  PublicSubnet:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PulblicSubnetCidr
+      AvailabilityZone: "us-east-1a"
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Join 
+          - '-'
+          - - !Ref NamingPrefix
+            - PublicSubnet
+  DBSubnet:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet Group for mySQL Database
+      SubnetIds:
+        - !Ref PrivateSubnet
+        - !Ref PublicSubnet
+      Tags:
+        - Key: Name
+          Value: !Join
+          - '-'
+          - - !Ref NamingPrefix
+            - DBSubnet
+  PublicRouteTable:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join 
+          - '-'
+          - - !Ref NamingPrefix
+            - PublicRT
+  PrivateRouteTable:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join 
+          - '-'
+          - - !Ref NamingPrefix
+            - PrivateRT
+
+  EIP:
+    DependsOn: InternetGateway
+    Type: 'AWS::EC2::EIP'
+    Properties:
+      Domain: VPC
+  NATGateway:
+    Type: 'AWS::EC2::NatGateway'
+    Properties:
+      AllocationId: !GetAtt
+        - EIP
+        - AllocationId
+      SubnetId: !Ref PublicSubnet
+      ConnectivityType: public
+      Tags:
+        - Key: Name
+          Value: !Join 
+          - '-'
+          - - !Ref NamingPrefix
+            - NAT
+  PublicRoute:
+    Type: 'AWS::EC2::Route'
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      GatewayId: !Ref InternetGateway
+      DestinationCidrBlock: 0.0.0.0/0
+  
+  PrivateRoute:
+    Type: 'AWS::EC2::Route'
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      NatGatewayId: !Ref NATGateway
+      DestinationCidrBlock: 0.0.0.0/0
+
+  PrivateSubnetAssociations:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    DependsOn: 
+      - PrivateRoute
+      - PrivateSubnet
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet
+
+  PublicSubnetAssociations:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    DependsOn: 
+      - PublicRoute
+      - PublicSubnet
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet      
+
+  SecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Security group
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join 
+          - '-'
+          - - !Ref NamingPrefix
+            - SG
+  SecurityGroupDB:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Security group for DB
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join 
+          - '-'
+          - - !Ref NamingPrefix
+            - SG-DB
+  SecurityGroupEgressRule:
+    Type: 'AWS::EC2::SecurityGroupEgress'
+    DependsOn: SecurityGroup
+    Properties:
+      Description: All Trafic
+      GroupId: !Ref SecurityGroup
+      IpProtocol: '-1'
+      CidrIp: 0.0.0.0/0
+      FromPort: 0
+      ToPort: 0
+  SecurityGroupIngressRuleSSH:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    DependsOn: SecurityGroup
+    Properties:
+      Description: Allow SSH
+      GroupId: !Ref SecurityGroup
+      IpProtocol: tcp
+      CidrIp: 0.0.0.0/0
+      FromPort: 22
+      ToPort: 22
+  SecurityGroupIngressRuleDB:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    DependsOn: SecurityGroupDB
+    Properties:
+      Description: Allow Port 3306 from private subnet
+      GroupId: !Ref SecurityGroupDB
+      IpProtocol: tcp
+      CidrIp: 0.0.0.0/0
+      FromPort: 3306
+      ToPort: 3306
+  SecurityGroupEgressRuleDB:
+    Type: 'AWS::EC2::SecurityGroupEgress'
+    DependsOn: SecurityGroupDB
+    Properties:
+      Description: All Trafic
+      GroupId: !Ref SecurityGroupDB
+      IpProtocol: '-1'
+      CidrIp: 0.0.0.0/0
+      FromPort: 0
+      ToPort: 0
+  PrivateInstance:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: !Ref ImageId
+      SubnetId: !Ref PrivateSubnet
+      KeyName: !Ref KeyPairs
+      SecurityGroupIds:
+        - !Ref SecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Join 
+          - '-'
+          - - !Ref NamingPrefix
+            - private-instance
+  PublicInstance:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: !Ref ImageId
+      SubnetId: !Ref PublicSubnet
+      KeyName: !Ref KeyPairs
+      SecurityGroupIds:
+        - !Ref SecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Join 
+          - '-'
+          - - !Ref NamingPrefix
+            - public-instance
+  MySqlDB:
+    DependsOn:
+      - DBSubnet
+      - SecurityGroupDB
+      - SecurityGroup
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: mysqldbinstance
+      DBName: db1
+      DBInstanceClass: !Ref DBInstanceClass
+      AllocatedStorage: 20
+      Engine: MySQL
+      EngineVersion: "8.0.28"
+      MasterUsername: !Ref DBUsername
+      MasterUserPassword: !Ref DBPassword
+      DBSubnetGroupName: !Ref DBSubnet
+      MultiAZ: true
+      PubliclyAccessible: false
+      VPCSecurityGroups:
+        - !Ref SecurityGroupDB
+        - !Ref SecurityGroup
